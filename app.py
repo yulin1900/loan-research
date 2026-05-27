@@ -1,6 +1,6 @@
 import os
 import json
-import anthropic
+import google.generativeai as genai
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, jsonify
 from flask_mail import Mail, Message
@@ -15,7 +15,8 @@ app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_USERNAME')
 mail = Mail(app)
 
-client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 BANKS = [
     "土地銀行","合作金庫","第一銀行","華南銀行","彰化銀行","兆豐銀行",
@@ -26,17 +27,19 @@ BANKS = [
 
 def get_time_ranges():
     today = datetime.today()
-    one_month_ago  = today - timedelta(days=30)
-    three_months_ago = today - timedelta(days=90)
     fmt = "%Y年%m月%d日"
     return {
-        "1m":  f"{one_month_ago.strftime(fmt)} ~ {today.strftime(fmt)}",
-        "3m":  f"{three_months_ago.strftime(fmt)} ~ {today.strftime(fmt)}",
+        "1m": f"{(today - timedelta(days=30)).strftime(fmt)} ~ {today.strftime(fmt)}",
+        "3m": f"{(today - timedelta(days=90)).strftime(fmt)} ~ {today.strftime(fmt)}",
     }
+
+def ask_gemini(prompt):
+    response = model.generate_content(prompt)
+    return response.text
 
 def query_banks(batch, time_range):
     prompt = f"""針對 {time_range}，整合 PTT/Dcard/Threads 信貸核貸心得。
-只針對以下銀行輸出 JSON 陣列（純 JSON，第一個字元必須是 [）：
+只針對以下銀行輸出 JSON 陣列（純 JSON，第一個字元必須是 [，不要有任何說明文字）：
 {', '.join(batch)}
 
 格式：
@@ -44,69 +47,59 @@ def query_banks(batch, time_range):
 
 tier: 1=APR<2.4%, 2=APR 2.5~2.8%, 3=APR>2.8%
 無社群資料則 community 填「無社群實戰數據」，不足2篇 lowSample:true
-只輸出 JSON 陣列。"""
+只輸出 JSON 陣列，不要加 ```json 或任何 markdown。"""
 
-    response = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=4000,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    text = response.content[0].text
+    text = ask_gemini(prompt)
+    # 清除可能的 markdown
+    text = text.replace('```json', '').replace('```', '').strip()
     s, e = text.find('['), text.rfind(']')
     if s == -1 or e == -1:
         return []
     return json.loads(text[s:e+1])
 
 def query_buzz(time_range):
-    prompt = f"""{time_range} 台灣信貸市場，社群討論度前4名。只輸出JSON陣列：
+    prompt = f"""{time_range} 台灣信貸市場，社群討論度前4名。
+只輸出JSON陣列（不要加 ```json 或任何說明）：
 [{{"rank":1,"icon":"👑","bank":"銀行名","reason":"原因（40字內）","target":"適合誰"}}]"""
-    response = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=800,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    text = response.content[0].text
+    text = ask_gemini(prompt)
+    text = text.replace('```json', '').replace('```', '').strip()
     s, e = text.find('['), text.rfind(']')
     if s == -1 or e == -1:
         return []
     return json.loads(text[s:e+1])
 
 def query_summary(time_range):
-    prompt = f"{time_range} 台灣信貸市場一句話行情摘要（40字內），只輸出純文字。"
-    response = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=200,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.content[0].text.strip()
+    prompt = f"{time_range} 台灣信貸市場一句話行情摘要（40字內），只輸出純文字，不要任何標點符號以外的格式。"
+    return ask_gemini(prompt).strip()
 
 def build_report(time_range, label):
     batches = [BANKS[i:i+6] for i in range(0, len(BANKS), 6)]
     all_banks = []
     for batch in batches:
-        rows = query_banks(batch, time_range)
-        all_banks.extend(rows)
+        try:
+            rows = query_banks(batch, time_range)
+            all_banks.extend(rows)
+        except Exception:
+            continue
 
     def sort_key(b):
         tier = b.get('tier', 2)
-        rate_str = b.get('rateRange', '9%').split('~')[0].replace('%','').strip()
-        try:    rate = float(rate_str)
-        except: rate = 9.0
+        try:
+            rate = float(b.get('rateRange', '9%').split('~')[0].replace('%','').strip())
+        except:
+            rate = 9.0
         return (tier, rate)
 
     all_banks.sort(key=sort_key)
     for i, b in enumerate(all_banks):
         b['rank'] = i + 1
 
-    buzz    = query_buzz(time_range)
-    summary = query_summary(time_range)
-
     return {
         "label":     label,
         "timeRange": time_range,
-        "summary":   summary,
+        "summary":   query_summary(time_range),
         "banks":     all_banks,
-        "buzz":      buzz,
+        "buzz":      query_buzz(time_range),
     }
 
 @app.route('/')
@@ -115,9 +108,9 @@ def index():
 
 @app.route('/api/query', methods=['POST'])
 def query():
-    data     = request.json
-    email    = data.get('email', '').strip()
-    ranges   = get_time_ranges()
+    data  = request.json
+    email = data.get('email', '').strip()
+    ranges = get_time_ranges()
 
     try:
         report_1m = build_report(ranges['1m'], '近一個月')
@@ -125,9 +118,13 @@ def query():
         reports   = [report_1m, report_3m]
 
         if email and '@' in email:
-            html_body = render_template('email.html', reports=reports, generated_at=datetime.today().strftime('%Y-%m-%d %H:%M'))
+            html_body = render_template(
+                'email.html',
+                reports=reports,
+                generated_at=datetime.today().strftime('%Y-%m-%d %H:%M')
+            )
             msg = Message(
-                subject=f"信貸統計表報告｜近1個月 & 近3個月｜{datetime.today().strftime('%Y-%m-%d')}",
+                subject=f"信貸統計表｜近1個月 & 近3個月｜{datetime.today().strftime('%Y-%m-%d')}",
                 recipients=[email],
                 html=html_body
             )
