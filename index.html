@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>信貸統計表｜社群輿情調查系統</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700;900&family=DM+Mono:wght@400;500&display=swap');
+:root {
+  --bg:#0a0a0f; --surface:#111118; --surface2:#18181f;
+  --border:#2a2a3a; --accent:#e8c96a; --purple:#7b61ff;
+  --green:#4cffb0; --red:#ff5f5f; --orange:#ff8c60;
+  --text:#e8e6f0; --muted:#6b6880;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Noto Serif TC',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background-image:linear-gradient(rgba(123,97,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(123,97,255,.04) 1px,transparent 1px);
+  background-size:36px 36px;}
+.wrap{position:relative;z-index:1;max-width:1020px;margin:0 auto;padding:36px 16px;}
+
+.header{text-align:center;margin-bottom:40px;}
+.badge{display:inline-block;font-family:'DM Mono',monospace;font-size:10px;letter-spacing:3px;color:var(--purple);border:1px solid var(--purple);padding:3px 14px;border-radius:2px;margin-bottom:16px;}
+h1{font-size:clamp(24px,5vw,42px);font-weight:900;line-height:1.2;background:linear-gradient(135deg,#fff 0%,var(--accent) 55%,var(--purple) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:10px;}
+.subtitle{color:var(--muted);font-size:13px;}
+
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;margin-bottom:24px;position:relative;overflow:hidden;}
+.panel::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;}
+.panel.purple::before{background:linear-gradient(90deg,var(--purple),var(--accent),transparent);}
+.panel.green::before{background:linear-gradient(90deg,var(--green),var(--accent),transparent);}
+.panel.gold::before{background:linear-gradient(90deg,var(--accent),var(--orange),transparent);}
+.panel-label{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:20px;}
+
+.info-box{background:rgba(123,97,255,.08);border:1px solid rgba(123,97,255,.2);border-radius:8px;padding:16px 20px;margin-bottom:20px;font-size:13px;color:#a090ff;line-height:1.8;}
+.info-box strong{color:var(--accent);}
+
+label{display:block;font-family:'DM Mono',monospace;font-size:11px;color:var(--muted);letter-spacing:1px;margin-bottom:6px;}
+input[type=email]{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:14px;padding:11px 14px;outline:none;transition:border-color .2s;}
+input[type=email]:focus{border-color:var(--purple);}
+
+.btn-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;}
+.btn{display:inline-flex;align-items:center;gap:6px;border:none;border-radius:8px;padding:11px 26px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .2s;white-space:nowrap;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn-purple{background:linear-gradient(135deg,var(--purple),#5b41dd);color:#fff;}
+.btn-ghost{background:var(--surface2);border:1px solid var(--border);color:var(--muted);}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent);}
+
+.progress-wrap{margin-top:18px;display:none;}
+.progress-wrap.show{display:block;}
+.progress-label{font-family:'DM Mono',monospace;font-size:11px;color:var(--purple);margin-bottom:7px;display:flex;justify-content:space-between;}
+.progress-bar{height:4px;background:var(--border);border-radius:2px;overflow:hidden;}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--purple),var(--green));border-radius:2px;transition:width .5s ease;}
+
+.alert{padding:11px 14px;border-radius:8px;font-size:13px;font-family:'DM Mono',monospace;margin-top:14px;display:none;}
+.alert.show{display:block;}
+.alert-err{background:rgba(255,95,95,.08);border:1px solid rgba(255,95,95,.3);color:var(--red);}
+.alert-ok{background:rgba(76,255,176,.08);border:1px solid rgba(76,255,176,.3);color:var(--green);}
+
+/* Tabs */
+.tabs{display:flex;gap:0;margin-bottom:0;border-bottom:1px solid var(--border);}
+.tab-btn{background:none;border:none;color:var(--muted);font-family:'DM Mono',monospace;font-size:12px;letter-spacing:1px;padding:10px 22px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .2s;}
+.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent);}
+.tab-content{display:none;padding-top:20px;}
+.tab-content.active{display:block;}
+
+.summary-banner{font-size:13px;color:#9990b0;font-style:italic;padding:10px 14px;background:var(--surface2);border-left:3px solid var(--purple);border-radius:6px;margin-bottom:20px;}
+
+.table-wrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:12px;min-width:720px;}
+thead tr{background:var(--surface2);}
+th{padding:10px 12px;text-align:left;font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1.5px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;}
+tbody tr{border-bottom:1px solid rgba(42,42,58,.4);transition:background .15s;}
+tbody tr:hover{background:rgba(123,97,255,.04);}
+td{padding:10px 12px;vertical-align:top;line-height:1.5;}
+.rank{font-family:'DM Mono',monospace;color:var(--accent);font-weight:600;}
+.rate{font-family:'DM Mono',monospace;white-space:nowrap;}
+.bname{font-weight:700;white-space:nowrap;}
+.muted-td{color:#9990b0;font-size:11px;}
+.low-sample{color:var(--orange);font-size:10px;margin-top:3px;}
+.tier{display:inline-block;font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;padding:2px 8px;border-radius:3px;font-weight:500;}
+.t1{background:rgba(76,255,176,.12);color:var(--green);border:1px solid rgba(76,255,176,.3);}
+.t2{background:rgba(232,201,106,.12);color:var(--accent);border:1px solid rgba(232,201,106,.3);}
+.t3{background:rgba(255,140,96,.12);color:var(--orange);border:1px solid rgba(255,140,96,.3);}
+
+.buzz-card{display:flex;gap:14px;padding:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:10px;}
+.buzz-icon{font-size:22px;flex-shrink:0;}
+.buzz-bank{font-weight:700;color:var(--accent);margin-bottom:4px;font-size:14px;}
+.buzz-reason{font-size:12px;color:var(--muted);line-height:1.7;}
+
+#result{display:none;}
+#result.show{display:block;}
+.disclaimer{font-size:11px;color:#3a3850;text-align:center;margin-top:28px;font-family:'DM Mono',monospace;line-height:1.8;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="header">
+    <div class="badge">Social Listening · 社群輿情分析</div>
+    <h1>信貸統計表<br>調查系統</h1>
+    <p class="subtitle">自動搜尋近1個月 & 近3個月 · 整合 PTT / Dcard / Threads 真實核貸心得</p>
+  </div>
+
+  <div class="panel purple">
+    <div class="panel-label">// 查詢設定</div>
+
+    <div class="info-box">
+      📅 本系統自動抓取 <strong>近一個月</strong> 與 <strong>近三個月</strong> 兩個時間區間的社群討論，<br>
+      整合 23 家銀行核貸心得後，一次產出兩份報告並寄送至您的信箱。
+    </div>
+
+    <label>收件信箱（必填，兩份報告將自動寄送）</label>
+    <input type="email" id="emailInput" placeholder="your@email.com">
+
+    <div class="btn-row">
+      <button class="btn btn-purple" id="queryBtn" onclick="runQuery()">
+        🔍 開始調查 & 寄送報告
+      </button>
+      <button class="btn btn-ghost" id="copyBtn" onclick="copyReport()" style="display:none">
+        複製報告
+      </button>
+    </div>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-label">
+        <span id="progressText">初始化…</span>
+        <span id="progressPct">0%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+    </div>
+
+    <div class="alert alert-err" id="errAlert"></div>
+    <div class="alert alert-ok"  id="okAlert"></div>
+  </div>
+
+  <div id="result">
+    <!-- Tabs -->
+    <div class="panel green" style="padding-bottom:0">
+      <div class="panel-label">// 信貸統計表</div>
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab(0)">📅 近一個月</button>
+        <button class="tab-btn"        onclick="switchTab(1)">📆 近三個月</button>
+      </div>
+      <div class="tab-content active" id="tab0"></div>
+      <div class="tab-content"        id="tab1"></div>
+    </div>
+  </div>
+
+  <div class="disclaimer">
+    資料來源：PTT / Dcard / Threads 網友核貸心得<br>
+    僅供參考，不構成任何財務建議。實際申貸條件以各銀行官方為準。
+  </div>
+</div>
+
+<script>
+let allReports = [];
+
+function setProgress(pct, text) {
+  document.getElementById('progressWrap').classList.add('show');
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressText').textContent = text;
+  document.getElementById('progressPct').textContent = pct + '%';
+}
+function showErr(msg) {
+  const el = document.getElementById('errAlert');
+  el.textContent = '❌ ' + msg; el.classList.add('show');
+}
+function showOk(msg) {
+  const el = document.getElementById('okAlert');
+  el.textContent = '✓ ' + msg; el.classList.add('show');
+}
+function switchTab(idx) {
+  document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active', i===idx));
+  document.querySelectorAll('.tab-content').forEach((c,i) => c.classList.toggle('active', i===idx));
+}
+
+async function runQuery() {
+  const email = document.getElementById('emailInput').value.trim();
+  if (!email || !email.includes('@')) { showErr('請輸入有效的電子郵件地址'); return; }
+
+  document.getElementById('errAlert').classList.remove('show');
+  document.getElementById('okAlert').classList.remove('show');
+  document.getElementById('result').classList.remove('show');
+  document.getElementById('copyBtn').style.display = 'none';
+
+  const btn = document.getElementById('queryBtn');
+  btn.disabled = true;
+
+  const steps = [
+    [5,  '準備查詢近一個月社群輿情…'],
+    [15, '搜尋近一個月 PTT / Dcard（第1批）…'],
+    [30, '搜尋近一個月 PTT / Dcard（第2批）…'],
+    [45, '搜尋近一個月 PTT / Dcard（第3批）…'],
+    [55, '開始查詢近三個月社群輿情…'],
+    [65, '搜尋近三個月 PTT / Dcard（第1批）…'],
+    [78, '搜尋近三個月 PTT / Dcard（第2批）…'],
+    [88, '整合排序，生成統計表…'],
+    [95, '寄送報告至信箱…'],
+  ];
+
+  let stepIdx = 0;
+  const ticker = setInterval(() => {
+    if (stepIdx < steps.length) {
+      setProgress(steps[stepIdx][0], steps[stepIdx][1]);
+      stepIdx++;
+    }
+  }, 3500);
+
+  try {
+    const resp = await fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const data = await resp.json();
+    clearInterval(ticker);
+
+    if (!data.success) throw new Error(data.error || '查詢失敗');
+
+    setProgress(100, '完成！');
+    allReports = data.reports;
+    renderReports(data.reports);
+    showOk(`兩份報告已寄送至 ${email}`);
+
+  } catch(e) {
+    clearInterval(ticker);
+    showErr(e.message);
+    document.getElementById('progressWrap').classList.remove('show');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderReports(reports) {
+  reports.forEach((report, idx) => {
+    const container = document.getElementById('tab' + idx);
+    container.innerHTML = buildReportHTML(report);
+  });
+  document.getElementById('result').classList.add('show');
+  document.getElementById('copyBtn').style.display = '';
+  document.getElementById('result').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function buildReportHTML(report) {
+  const tierMap = {1:['t1','T1 低利破盤'], 2:['t2','T2 職業導向'], 3:['t3','T3 高彈性']};
+  let html = `<div class="summary-banner">📊 ${report.summary}</div>
+  <div class="table-wrap"><table>
+    <thead><tr>
+      <th>排名</th><th>Tier</th><th>銀行</th><th>實際利率</th>
+      <th>門檻/隱形條件</th><th>核心規格</th><th>社群實戰回報</th>
+    </tr></thead><tbody>`;
+
+  (report.banks || []).forEach(b => {
+    const [cls, label] = tierMap[b.tier] || tierMap[2];
+    html += `<tr>
+      <td class="rank">#${b.rank}</td>
+      <td><span class="tier ${cls}">${label}</span></td>
+      <td class="bname">${b.name}</td>
+      <td class="rate">${b.rateRange || '-'}</td>
+      <td class="muted-td">${b.conditions || '-'}</td>
+      <td style="font-size:11px">${b.spec || '-'}</td>
+      <td class="muted-td">${b.community || '-'}
+        ${b.lowSample ? '<div class="low-sample">⚠ 調查樣本較少</div>' : ''}
+      </td></tr>`;
+  });
+  html += `</tbody></table></div>`;
+
+  if (report.buzz && report.buzz.length) {
+    html += `<div style="margin-top:24px">
+      <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;color:var(--muted);margin-bottom:14px">// 社群討論度排行榜</div>`;
+    report.buzz.forEach(b => {
+      html += `<div class="buzz-card">
+        <div class="buzz-icon">${b.icon}</div>
+        <div>
+          <div class="buzz-bank">第${b.rank}名：${b.bank}</div>
+          <div class="buzz-reason">${b.reason}<br><em style="color:#7b61ff">✦ 適合：${b.target}</em></div>
+        </div></div>`;
+    });
+    html += `</div>`;
+  }
+  return html;
+}
+
+function toMarkdown(reports) {
+  let m = '';
+  reports.forEach(r => {
+    m += `# 信貸統計表｜${r.label}（${r.timeRange}）\n\n> ${r.summary}\n\n`;
+    m += `| 排名 | Tier | 銀行 | 利率 | 條件 | 規格 | 社群回報 |\n|---|---|---|---|---|---|---|\n`;
+    (r.banks || []).forEach(b => {
+      m += `| #${b.rank} | T${b.tier} | **${b.name}** | ${b.rateRange} | ${b.conditions} | ${b.spec} | ${b.community}${b.lowSample ? ' ⚠樣本少' : ''} |\n`;
+    });
+    m += `\n## 🔥 社群熱度榜\n\n`;
+    (r.buzz || []).forEach(b => { m += `${b.icon} **${b.bank}**：${b.reason}（適合：${b.target}）\n\n`; });
+    m += '\n---\n\n';
+  });
+  return m;
+}
+
+function copyReport() {
+  if (!allReports.length) return;
+  navigator.clipboard.writeText(toMarkdown(allReports)).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = '✓ 已複製';
+    setTimeout(() => { btn.textContent = '複製報告'; }, 2000);
+  });
+}
+</script>
+</body>
+</html>
