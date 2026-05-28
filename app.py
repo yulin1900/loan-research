@@ -38,7 +38,7 @@ def get_gemini_url():
     key = os.environ.get('GEMINI_API_KEY', '')
     return (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={key}"
+        f"gemini-2.0-flash-001:generateContent?key={key}"
     )
 
 def ask_gemini(prompt, retry=4):
