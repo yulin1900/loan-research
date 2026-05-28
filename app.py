@@ -7,7 +7,6 @@ from flask import Flask, render_template, request, jsonify
 from flask_mail import Mail, Message
 
 app = Flask(__name__)
-
 app.config['MAIL_SERVER']         = 'smtp.gmail.com'
 app.config['MAIL_PORT']           = 587
 app.config['MAIL_USE_TLS']        = True
@@ -26,77 +25,103 @@ BANKS_LIST = "土地銀行、合作金庫、第一銀行、華南銀行、彰化
 
 def get_time_ranges():
     today = datetime.today()
-    fmt   = "%Y年%m月%d日"
+    fmt = "%Y年%m月%d日"
     return {
         "1m": f"{(today-timedelta(days=30)).strftime(fmt)} ~ {today.strftime(fmt)}",
         "3m": f"{(today-timedelta(days=90)).strftime(fmt)} ~ {today.strftime(fmt)}",
     }
 
-def ask_gemini(prompt, retry=4):
+def ask_gemini(prompt, retry=5):
     for attempt in range(retry):
-        resp = requests.post(
-            GEMINI_URL,
-            headers={"Content-Type": "application/json"},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=120
-        )
-        if resp.status_code == 429:
-            wait = 20 * (attempt + 1)
-            time.sleep(wait)
-            continue
-        resp.raise_for_status()
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        try:
+            resp = requests.post(
+                GEMINI_URL,
+                headers={"Content-Type": "application/json"},
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+                timeout=180
+            )
+            if resp.status_code == 429:
+                wait = 30 * (attempt + 1)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        except requests.exceptions.Timeout:
+            if attempt == retry - 1:
+                raise Exception("Gemini API 回應逾時")
+            time.sleep(10)
     raise Exception("Gemini API 速率限制，請稍後再試")
 
-def parse_json_array(text):
-    text = text.replace("```json", "").replace("```", "").strip()
-    s, e = text.find("["), text.rfind("]")
-    if s == -1 or e == -1:
+def parse_json_block(text, key):
+    """從大 JSON 中取出指定 key 的陣列"""
+    marker = f'"{key}"'
+    idx = text.find(marker)
+    if idx == -1:
         return []
-    return json.loads(text[s:e+1])
+    start = text.find("[", idx)
+    if start == -1:
+        return []
+    depth, end = 0, start
+    for i, c in enumerate(text[start:], start):
+        if c == "[": depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    try:
+        return json.loads(text[start:end+1])
+    except:
+        return []
 
 def build_reports():
-    """只呼叫 3 次 API，同時產出近1個月和近3個月兩份報告"""
     ranges = get_time_ranges()
     today_str = datetime.today().strftime("%Y年%m月%d日")
 
-    # ── 第1次：查銀行資料（涵蓋近3個月，同時標注近1個月差異）──
-    banks_prompt = f"""今天是 {today_str}。
-針對近3個月台灣信貸市場，整合 PTT/Dcard/Threads 核貸心得，
-輸出以下 23 家銀行的 JSON 陣列（純 JSON，不要 markdown，第一個字元必須是 [）：
-{BANKS_LIST}
+    # ── 單一大 prompt，一次呼叫取得所有資料 ──
+    prompt = f"""今天是 {today_str}。請整合近3個月台灣 PTT/Dcard/Threads 信貸核貸心得，輸出以下純 JSON（不要 markdown，不要說明文字）：
 
-每筆格式：
-{{"name":"銀行名","tier":1,"rateRange":"2.16%~2.45%","conditions":"條件說明","spec":"核心規格（20字內）","community":"社群回報（來源：PTT/Dcard）","recentChange":"近一個月是否有變化，無則填無明顯變化","lowSample":false}}
+{{
+  "summary1m": "近一個月（{ranges['1m']}）市場摘要，25字內",
+  "summary3m": "近三個月（{ranges['3m']}）市場摘要，25字內",
+  "banks": [
+    {{
+      "name": "銀行名",
+      "tier": 1,
+      "rateRange": "2.16%~2.45%",
+      "conditions": "條件說明",
+      "spec": "核心規格20字內",
+      "community": "社群回報（來源：PTT/Dcard）",
+      "recentChange": "近一個月變化，無則填無",
+      "lowSample": false
+    }}
+  ],
+  "buzz": [
+    {{"rank": 1, "icon": "👑", "bank": "銀行名", "reason": "熱議原因30字內", "target": "適合誰"}}
+  ]
+}}
 
+banks 必須包含全部 23 家：{BANKS_LIST}
 tier: 1=APR<2.4%, 2=APR 2.5~2.8%, 3=APR>2.8%
-只輸出 JSON 陣列，23 家全部包含。"""
+buzz 列前4名
+只輸出 JSON，第一個字元是 {{"""
 
-    all_banks = parse_json_array(ask_gemini(banks_prompt))
-    time.sleep(10)
+    raw = ask_gemini(prompt)
+    raw = raw.replace("```json", "").replace("```", "").strip()
 
-    # ── 第2次：buzz 排行 ──
-    buzz_prompt = f"""近3個月台灣信貸市場，社群討論度前4名。
-只輸出 JSON 陣列（不要 markdown）：
-[{{"rank":1,"icon":"👑","bank":"銀行名","reason":"原因30字內","target":"適合誰"}}]"""
-    buzz = parse_json_array(ask_gemini(buzz_prompt))
-    time.sleep(10)
-
-    # ── 第3次：兩段摘要一起產 ──
-    summary_prompt = f"""請分別用一句話（各25字內）描述：
-1. 近一個月（{ranges['1m']}）台灣信貸市場行情
-2. 近三個月（{ranges['3m']}）台灣信貸市場行情
-
-只輸出 JSON：{{"summary1m":"...","summary3m":"..."}}"""
-    summary_text = ask_gemini(summary_prompt)
-    summary_text = summary_text.replace("```json","").replace("```","").strip()
+    # 解析整體 JSON
     try:
-        s = summary_text.find("{")
-        e = summary_text.rfind("}")
-        summaries = json.loads(summary_text[s:e+1])
-        summary_1m = summaries.get("summary1m", "近一個月市場行情")
-        summary_3m = summaries.get("summary3m", "近三個月市場行情")
-    except:
+        s = raw.find("{")
+        e = raw.rfind("}")
+        data = json.loads(raw[s:e+1])
+        all_banks  = data.get("banks", [])
+        buzz       = data.get("buzz", [])
+        summary_1m = data.get("summary1m", "近一個月台灣信貸市場行情")
+        summary_3m = data.get("summary3m", "近三個月台灣信貸市場行情")
+    except Exception:
+        # fallback：嘗試逐段解析
+        all_banks  = parse_json_block(raw, "banks")
+        buzz       = parse_json_block(raw, "buzz")
         summary_1m = summary_3m = "台灣信貸市場持續競爭，純網銀低利方案受矚目"
 
     # 排序
@@ -111,30 +136,18 @@ tier: 1=APR<2.4%, 2=APR 2.5~2.8%, 3=APR>2.8%
     for i, b in enumerate(all_banks):
         b["rank"] = i + 1
 
-    # 近1個月報告：標注有變化的銀行
+    # 近1個月：標注有近期變化的銀行
     banks_1m = []
     for b in all_banks:
         b1 = dict(b)
-        change = b.get("recentChange", "")
-        if change and change != "無明顯變化":
-            b1["community"] = f"【近期變化】{change}｜{b.get('community','')}"
+        change = b.get("recentChange", "無")
+        if change and change not in ("無", "無明顯變化", "無變化"):
+            b1["community"] = f"【近期】{change}｜{b.get('community','')}"
         banks_1m.append(b1)
 
     return [
-        {
-            "label":     "近一個月",
-            "timeRange": ranges["1m"],
-            "summary":   summary_1m,
-            "banks":     banks_1m,
-            "buzz":      buzz,
-        },
-        {
-            "label":     "近三個月",
-            "timeRange": ranges["3m"],
-            "summary":   summary_3m,
-            "banks":     all_banks,
-            "buzz":      buzz,
-        },
+        {"label":"近一個月","timeRange":ranges["1m"],"summary":summary_1m,"banks":banks_1m,"buzz":buzz},
+        {"label":"近三個月","timeRange":ranges["3m"],"summary":summary_3m,"banks":all_banks,"buzz":buzz},
     ]
 
 @app.route("/")
@@ -145,24 +158,19 @@ def index():
 def query():
     data  = request.json
     email = data.get("email", "").strip()
-
     try:
         reports = build_reports()
-
         if email and "@" in email:
             html_body = render_template(
-                "email.html",
-                reports=reports,
+                "email.html", reports=reports,
                 generated_at=datetime.today().strftime("%Y-%m-%d %H:%M")
             )
             mail.send(Message(
-                subject=f"信貸統計表｜近1個月 & 近3個月｜{datetime.today().strftime('%Y-%m-%d')}",
+                subject=f"信貸統計表｜{datetime.today().strftime('%Y-%m-%d')}",
                 recipients=[email],
                 html=html_body
             ))
-
         return jsonify({"success": True, "reports": reports})
-
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
