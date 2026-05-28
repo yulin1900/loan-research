@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import threading
 import requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, jsonify
@@ -15,13 +16,8 @@ app.config['MAIL_PASSWORD']       = os.environ.get('MAIL_PASSWORD', '')
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_USERNAME', '')
 mail = Mail(app)
 
-def get_gemini_url():
-    """每次呼叫時才讀取，確保環境變數已載入"""
-    key = os.environ.get('GEMINI_API_KEY', '')
-    return (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={key}"
-    )
+# 儲存查詢狀態（記憶體內，重啟清空）
+jobs = {}
 
 BANKS_LIST = (
     "土地銀行、合作金庫、第一銀行、華南銀行、彰化銀行、兆豐銀行、"
@@ -38,6 +34,13 @@ def get_time_ranges():
         "3m": f"{(today-timedelta(days=90)).strftime(fmt)} ~ {today.strftime(fmt)}",
     }
 
+def get_gemini_url():
+    key = os.environ.get('GEMINI_API_KEY', '')
+    return (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.0-flash:generateContent?key={key}"
+    )
+
 def ask_gemini(prompt, retry=4):
     url = get_gemini_url()
     for attempt in range(retry):
@@ -52,9 +55,9 @@ def ask_gemini(prompt, retry=4):
                 time.sleep(30 * (attempt + 1))
                 continue
             if resp.status_code == 403:
-                raise Exception(f"Gemini API Key 無效或未授權 (403)")
+                raise Exception("Gemini API Key 無效 (403)")
             if resp.status_code == 404:
-                raise Exception(f"Gemini 模型名稱錯誤 (404)")
+                raise Exception("Gemini 模型名稱錯誤 (404)")
             resp.raise_for_status()
             candidates = resp.json().get("candidates", [])
             if not candidates:
@@ -62,9 +65,9 @@ def ask_gemini(prompt, retry=4):
             return candidates[0]["content"]["parts"][0]["text"]
         except requests.exceptions.Timeout:
             if attempt == retry - 1:
-                raise Exception("Gemini API 回應逾時，請重試")
+                raise Exception("Gemini API 回應逾時")
             time.sleep(10)
-    raise Exception("Gemini API 速率限制，請稍後 1 分鐘再試")
+    raise Exception("Gemini API 速率限制，請稍後再試")
 
 def build_reports():
     ranges = get_time_ranges()
@@ -93,27 +96,26 @@ def build_reports():
   ]
 }}
 
-banks 必須包含全部23家，順序任意：{BANKS_LIST}
+banks 必須包含全部23家：{BANKS_LIST}
 tier規則：1=APR<2.4%，2=APR 2.5~2.8%，3=APR>2.8%
-buzz列前4名討論最熱的方案
-輸出只有JSON，第一個字元是 {{，最後一個字元是 }}"""
+buzz列前4名
+只輸出JSON，第一個字元是 {{"""
 
     raw = ask_gemini(prompt)
     raw = raw.replace("```json", "").replace("```", "").strip()
 
     try:
-        s = raw.find("{")
-        e = raw.rfind("}")
+        s, e = raw.find("{"), raw.rfind("}")
         if s == -1 or e == -1:
-            raise ValueError("回應中找不到 JSON")
+            raise ValueError("找不到 JSON")
         data = json.loads(raw[s:e+1])
-    except (json.JSONDecodeError, ValueError) as ex:
-        raise Exception(f"JSON 解析失敗（{ex}）：{raw[:200]}")
+    except Exception as ex:
+        raise Exception(f"JSON解析失敗: {ex} | 原文前200字: {raw[:200]}")
 
     all_banks  = data.get("banks", [])
     buzz       = data.get("buzz", [])
-    summary_1m = data.get("summary1m", "近一個月台灣信貸市場行情平穩")
-    summary_3m = data.get("summary3m", "近三個月純網銀持續搶市，公教族低利優勢明顯")
+    summary_1m = data.get("summary1m", "近一個月台灣信貸市場行情")
+    summary_3m = data.get("summary3m", "近三個月台灣信貸市場行情")
 
     if not all_banks:
         raise Exception("Gemini 未回傳銀行資料，請重試")
@@ -142,20 +144,20 @@ buzz列前4名討論最熱的方案
         {"label":"近三個月","timeRange":ranges["3m"],"summary":summary_3m,"banks":all_banks,"buzz":buzz},
     ]
 
-@app.route("/")
-def index():
-    return render_template("index.html")
+def run_job(job_id, email):
+    """背景執行查詢，完成後寄信"""
+    jobs[job_id]["status"] = "running"
+    jobs[job_id]["message"] = "正在查詢 Gemini AI…"
 
-@app.route("/api/query", methods=["POST"])
-def query():
-    data  = request.json or {}
-    email = data.get("email", "").strip()
     try:
         reports = build_reports()
-        mail_sent = False
-        mail_error = ""
+        jobs[job_id]["reports"] = reports
+        jobs[job_id]["message"] = "查詢完成"
+
+        # 寄信
         if email and "@" in email:
-            try:
+            jobs[job_id]["message"] = "寄送報告中…"
+            with app.app_context():
                 html_body = render_template(
                     "email.html", reports=reports,
                     generated_at=datetime.today().strftime("%Y-%m-%d %H:%M")
@@ -165,27 +167,59 @@ def query():
                     recipients=[email],
                     html=html_body
                 ))
-                mail_sent = True
-            except Exception as me:
-                mail_error = str(me)
+            jobs[job_id]["mailSent"] = True
 
-        return jsonify({
-            "success": True,
-            "reports": reports,
-            "mailSent": mail_sent,
-            "mailError": mail_error
-        })
+        jobs[job_id]["status"] = "done"
+        jobs[job_id]["message"] = "完成！"
+
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        jobs[job_id]["status"] = "error"
+        jobs[job_id]["message"] = str(e)
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/api/query", methods=["POST"])
+def query():
+    """立刻回應 job_id，背景執行查詢"""
+    data  = request.json or {}
+    email = data.get("email", "").strip()
+
+    job_id = datetime.today().strftime("%Y%m%d%H%M%S")
+    jobs[job_id] = {
+        "status": "queued",
+        "message": "查詢已排隊",
+        "reports": None,
+        "mailSent": False,
+        "email": email,
+    }
+
+    t = threading.Thread(target=run_job, args=(job_id, email), daemon=True)
+    t.start()
+
+    return jsonify({"success": True, "jobId": job_id})
+
+@app.route("/api/status/<job_id>")
+def status(job_id):
+    """前端輪詢這個 endpoint 取得進度"""
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"status": "not_found"}), 404
+    return jsonify({
+        "status":   job["status"],
+        "message":  job["message"],
+        "reports":  job["reports"],
+        "mailSent": job["mailSent"],
+    })
 
 @app.route("/api/health")
 def health():
-    key = os.environ.get('GEMINI_API_KEY', '')
     return jsonify({
         "status": "ok",
-        "gemini_key_set": bool(key),
-        "mail_user_set": bool(os.environ.get('MAIL_USERNAME', '')),
-        "mail_pass_set": bool(os.environ.get('MAIL_PASSWORD', '')),
+        "gemini_key_set": bool(os.environ.get('GEMINI_API_KEY', '')),
+        "mail_user_set":  bool(os.environ.get('MAIL_USERNAME', '')),
+        "mail_pass_set":  bool(os.environ.get('MAIL_PASSWORD', '')),
     })
 
 if __name__ == "__main__":
